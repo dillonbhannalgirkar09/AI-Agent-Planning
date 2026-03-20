@@ -5,7 +5,7 @@ import Header from '@/components/Header';
 import InputForm from '@/components/InputForm';
 import AgentProgress from '@/components/AgentProgress';
 import ReportView from '@/components/ReportView';
-import { Report, AgentStep, AgentPipelineResult } from '@/lib/types';
+import { Report, AgentStep } from '@/lib/types';
 import { ArrowLeft, ChevronDown, ChevronUp, Brain } from 'lucide-react';
 
 type AppState = 'input' | 'processing' | 'report';
@@ -17,7 +17,8 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [showAgentSteps, setShowAgentSteps] = useState(false);
 
-   useEffect(() => {
+  // Auto-save report to localStorage
+  useEffect(() => {
     if (report) {
       localStorage.setItem('ai-planning-report', JSON.stringify(report));
       localStorage.setItem('ai-planning-steps', JSON.stringify(agentSteps));
@@ -39,23 +40,13 @@ export default function Home() {
     }
   }, []);
 
-  // Update handleNewReport to clear localStorage
-  const handleNewReport = () => {
-    setReport(null);
-    setAgentSteps([]);
-    setAppState('input');
-    setShowAgentSteps(false);
-    localStorage.removeItem('ai-planning-report');
-    localStorage.removeItem('ai-planning-steps');
-  };
-
-
   const handleSubmit = async (problemStatement: string) => {
     setIsLoading(true);
     setAppState('processing');
 
+    // Initialize steps
     const initialSteps: AgentStep[] = [
-      { agent: 'planner', status: 'running' },
+      { agent: 'planner', status: 'pending' },
       { agent: 'insight', status: 'pending' },
       { agent: 'execution', status: 'pending' },
     ];
@@ -72,26 +63,78 @@ export default function Home() {
         throw new Error('Failed to generate report');
       }
 
-      const result: AgentPipelineResult = await response.json();
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response stream');
 
-      // Animate through the steps
-      for (let i = 0; i < result.steps.length; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        setAgentSteps((prev) => {
-          const updated = [...prev];
-          updated[i] = result.steps[i];
-          if (i + 1 < updated.length) {
-            updated[i + 1] = { ...updated[i + 1], status: 'running' };
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process complete SSE messages
+        const messages = buffer.split('\n\n');
+        buffer = messages.pop() || ''; // Keep incomplete message in buffer
+
+        for (const message of messages) {
+          const dataLine = message
+            .split('\n')
+            .find((line) => line.startsWith('data: '));
+          if (!dataLine) continue;
+
+          const jsonStr = dataLine.replace('data: ', '');
+          try {
+            const data = JSON.parse(jsonStr);
+
+            if (data.type === 'step') {
+              setAgentSteps((prev) => {
+                const updated = [...prev];
+                const agentIndex = updated.findIndex(
+                  (s) => s.agent === data.agent
+                );
+                if (agentIndex !== -1) {
+                  updated[agentIndex] = {
+                    ...updated[agentIndex],
+                    status: data.status,
+                    reasoning: data.reasoning || updated[agentIndex].reasoning,
+                    ...(data.status === 'running'
+                      ? { startedAt: new Date().toISOString() }
+                      : {}),
+                    ...(data.status === 'completed'
+                      ? { completedAt: new Date().toISOString() }
+                      : {}),
+                  };
+                }
+                return updated;
+              });
+            }
+
+            if (data.type === 'complete') {
+              setReport(data.report);
+              // Small delay so user can see the last step complete
+              await new Promise((resolve) => setTimeout(resolve, 800));
+              setAppState('report');
+            }
+
+            if (data.type === 'error') {
+              throw new Error(data.message);
+            }
+          } catch (parseError) {
+            // Skip malformed JSON
+            if (
+              parseError instanceof Error &&
+              parseError.message !== 'Failed to generate report'
+            ) {
+              console.warn('Parse error:', parseError);
+            } else {
+              throw parseError;
+            }
           }
-          return updated;
-        });
+        }
       }
-
-      setAgentSteps(result.steps);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
-      setReport(result.report);
-      setAppState('report');
     } catch (error) {
       console.error('Error:', error);
       alert('Failed to generate report. Please try again.');
@@ -99,6 +142,15 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleNewReport = () => {
+    setReport(null);
+    setAgentSteps([]);
+    setAppState('input');
+    setShowAgentSteps(false);
+    localStorage.removeItem('ai-planning-report');
+    localStorage.removeItem('ai-planning-steps');
   };
 
   return (
@@ -170,4 +222,4 @@ export default function Home() {
       </main>
     </div>
   );
-}
+} 
