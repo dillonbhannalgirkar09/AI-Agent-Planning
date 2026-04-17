@@ -1,25 +1,11 @@
-import OpenAI from 'openai';
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { callLLM as callOpenRouter, callLLMJSON as callOpenRouterJSON } from './openrouter';
 
 export async function callLLM(
   systemPrompt: string,
   userPrompt: string,
   temperature: number = 0.7
 ): Promise<string> {
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    temperature,
-    max_tokens: 4000,
-  });
-
-  return response.choices[0].message.content || '';
+  return callOpenRouter(systemPrompt, userPrompt, temperature);
 }
 
 export async function callLLMJSON<T>(
@@ -27,19 +13,10 @@ export async function callLLMJSON<T>(
   userPrompt: string,
   temperature: number = 0.7
 ): Promise<T> {
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    temperature,
-    max_tokens: 4000,
-    response_format: { type: 'json_object' },
-  });
-
-  const content = response.choices[0].message.content || '{}';
-  return JSON.parse(content) as T;
+  return callOpenRouterJSON<T>(systemPrompt, userPrompt, temperature);
 }
 
-export default openai;
+// Keeping the default export for compatibility
+import openrouter from './openrouter';
+export default openrouter;
+
